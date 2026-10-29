@@ -63,6 +63,21 @@ pnpm test
 
 Cognito は stub します。セッションは実 DB を使います。
 
+## GitHub Actions（actions.lock）
+
+Workflow で使う Action のコミット SHA は [`.github/workflows/actions.lock`](.github/workflows/actions.lock) で固定しています。`@v4` のような浮動タグは使いません。
+
+初回または更新時:
+
+```bash
+gh extension install github/gh-actions-lock
+gh actions-lock
+```
+
+Workflow 内の Action バージョンを変えたあとは、必ず `gh actions-lock` を再実行して `actions.lock` もコミットしてください。lock が古いと CI が `Invalid lockfile` で失敗します。
+
+参考: [GitHub Actions で checkout@v7 のようなバージョン指定を書くのはやめよう！ 時代は actions.lock！](https://zenn.dev/progate/articles/24b1140180300c)
+
 ## API
 
 | Method | Path | 説明 |
