@@ -1,11 +1,12 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
+import { Home } from './pages/Home.js'
 import { auth } from './routes/auth.js'
 
 const app = new Hono()
 
 app.get('/', (c) => {
-  return c.text('Hello Hono!')
+  return c.html(<Home />)
 })
 
 app.route('/auth', auth)

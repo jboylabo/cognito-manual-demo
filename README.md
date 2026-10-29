@@ -1,6 +1,6 @@
 # cognito-manual-demo
 
-Hono（Node.js）から Amazon Cognito ユーザープールの登録・確認・サインイン・ログアウトを呼びます。
+Hono（Node.js）から Amazon Cognito ユーザープールの登録・確認・サインイン・ログアウト・パスワード変更を呼びます。トップページは Hono JSX の操作 UI です。
 
 参考: [はじめてのCognitoとExpressで実装するユーザー認証](https://zenn.dev/miumi/articles/f9c8923ec4f3ab)
 
@@ -27,6 +27,14 @@ pnpm run dev
 ```
 
 http://localhost:3000
+
+## UI
+
+ブラウザで開くと次の操作ができます。サインイン後のアクセストークンはブラウザの `localStorage` に保存されます。
+
+- Sign Up / Confirm Sign Up
+- Sign In / Sign Out
+- Change Password（サインイン後。現行パスワードと新しいパスワード）
 
 ## エンドポイント
 
@@ -59,6 +67,15 @@ curl -X POST http://localhost:3000/auth/signin \
 ```
 curl -X GET http://localhost:3000/auth/protected \
   -H "Authorization: Bearer <access token>"
+```
+
+パスワード変更（サインイン後）
+
+```
+curl -X POST http://localhost:3000/auth/change-password \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access token>" \
+  -d '{"previousPassword": "Password1!", "proposedPassword": "Password2!"}'
 ```
 
 ログアウト

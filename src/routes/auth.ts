@@ -1,4 +1,5 @@
 import {
+  ChangePasswordCommand,
   ConfirmSignUpCommand,
   GlobalSignOutCommand,
   InitiateAuthCommand,
@@ -132,6 +133,38 @@ auth.post('/logout', async (c) => {
     return c.json({ message: 'ログアウトが成功しました' })
   } catch (error) {
     return c.json({ message: 'ログアウトに失敗しました', error: errorMessage(error) }, 400)
+  }
+})
+
+auth.post('/change-password', async (c) => {
+  const token = accessTokenFromHeader(c.req.header('Authorization'))
+  if (!token) {
+    return c.json({ message: 'トークンが提供されていません' }, 401)
+  }
+
+  const body = await readBody(c)
+  const previousPassword = body?.previousPassword
+  const proposedPassword = body?.proposedPassword
+
+  if (!isNonEmptyString(previousPassword) || !isNonEmptyString(proposedPassword)) {
+    return c.json(
+      {
+        message: 'パスワード変更に失敗しました',
+        error: 'previousPassword, proposedPassword は必須です',
+      },
+      400,
+    )
+  }
+
+  try {
+    await cognito.send(new ChangePasswordCommand({
+      AccessToken: token,
+      PreviousPassword: previousPassword,
+      ProposedPassword: proposedPassword,
+    }))
+    return c.json({ message: 'パスワード変更が成功しました' })
+  } catch (error) {
+    return c.json({ message: 'パスワード変更に失敗しました', error: errorMessage(error) }, 400)
   }
 })
 
