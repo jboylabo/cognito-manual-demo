@@ -29,3 +29,4 @@ lerna-debug.log*
 
 # .pnpm-store
 .pnpm-store/
+.betterleaks/
