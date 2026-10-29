@@ -1,176 +1,98 @@
-import {
-  ChangePasswordCommand,
-  ConfirmSignUpCommand,
-  GlobalSignOutCommand,
-  InitiateAuthCommand,
-  SignUpCommand,
-} from '@aws-sdk/client-cognito-identity-provider'
 import { Hono } from 'hono'
-import { cognito, cognitoClientId, secretHash } from '../lib/cognito.js'
-import { type AuthEnv, accessTokenFromHeader, verifyToken } from '../middleware/auth.js'
+import type { CognitoAuthPort } from '../lib/cognito-port.js'
+import { CognitoAuthError } from '../lib/cognito-port.js'
+import {
+  clearSessionCookie,
+  readSessionCookie,
+  writeSessionCookie,
+} from '../lib/cookies.js'
+import { createSessionId, hashSessionId } from '../lib/crypto.js'
+import type { SessionStore } from '../lib/session-store.js'
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return '不明なエラー'
-}
-
-function withoutMetadata<T extends { $metadata?: unknown }>(output: T): Omit<T, '$metadata'> {
-  const { $metadata: metadata, ...data } = output
-  void metadata
-  return data
-}
+const AUTH_FAILED = { message: 'Authentication failed' }
+const AUTH_UNAVAILABLE = { message: 'Authentication service unavailable' }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
-async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown> | undefined> {
-  try {
-    const body: unknown = await c.req.json()
-    if (body === null || typeof body !== 'object' || Array.isArray(body)) return undefined
-    return body as Record<string, unknown>
-  } catch {
-    return undefined
-  }
+function isChallenge(result: object): boolean {
+  return 'challengeName' in result && typeof result.challengeName === 'string' && result.challengeName.length > 0
 }
 
-export const auth = new Hono<AuthEnv>()
+export function createAuthRoutes(cognito: CognitoAuthPort, sessions: SessionStore) {
+  const auth = new Hono()
 
-auth.post('/signup', async (c) => {
-  const body = await readBody(c)
-  const username = body?.username
-  const password = body?.password
-  const email = body?.email
+  auth.post('/login', async (c) => {
+    let body: unknown
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json(AUTH_FAILED, 401)
+    }
 
-  if (!isNonEmptyString(username) || !isNonEmptyString(password) || !isNonEmptyString(email)) {
-    return c.json(
-      { message: 'ユーザー登録に失敗しました', error: 'username, password, email は必須です' },
-      400,
-    )
-  }
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json(AUTH_FAILED, 401)
+    }
 
-  const hash = secretHash(username)
+    const email = (body as Record<string, unknown>).email
+    const password = (body as Record<string, unknown>).password
+    if (!isNonEmptyString(email) || !isNonEmptyString(password)) {
+      return c.json(AUTH_FAILED, 401)
+    }
 
-  try {
-    const data = await cognito.send(new SignUpCommand({
-      ClientId: cognitoClientId,
-      Username: username,
-      Password: password,
-      UserAttributes: [{ Name: 'email', Value: email }],
-      ...(hash ? { SecretHash: hash } : {}),
-    }))
-    return c.json({ message: 'ユーザー登録が成功しました', data: withoutMetadata(data) })
-  } catch (error) {
-    return c.json({ message: 'ユーザー登録に失敗しました', error: errorMessage(error) }, 400)
-  }
-})
+    try {
+      const result = await cognito.initiateAuth({
+        authFlow: 'USER_PASSWORD_AUTH',
+        email,
+        password,
+      })
 
-auth.post('/confirm-signup', async (c) => {
-  const body = await readBody(c)
-  const username = body?.username
-  const code = body?.code
+      if (isChallenge(result)) {
+        return c.json(AUTH_FAILED, 401)
+      }
+      if (!('accessToken' in result) || !result.accessToken || !result.refreshToken) {
+        return c.json(AUTH_FAILED, 401)
+      }
 
-  if (!isNonEmptyString(username) || !isNonEmptyString(code)) {
-    return c.json(
-      { message: 'ユーザー確認に失敗しました', error: 'username, code は必須です' },
-      400,
-    )
-  }
-
-  const hash = secretHash(username)
-
-  try {
-    const data = await cognito.send(new ConfirmSignUpCommand({
-      ClientId: cognitoClientId,
-      Username: username,
-      ConfirmationCode: code,
-      ...(hash ? { SecretHash: hash } : {}),
-    }))
-    return c.json({ message: 'ユーザー確認が成功しました', data: withoutMetadata(data) })
-  } catch (error) {
-    return c.json({ message: 'ユーザー確認に失敗しました', error: errorMessage(error) }, 400)
-  }
-})
-
-auth.post('/signin', async (c) => {
-  const body = await readBody(c)
-  const username = body?.username
-  const password = body?.password
-
-  if (!isNonEmptyString(username) || !isNonEmptyString(password)) {
-    return c.json(
-      { message: 'サインインに失敗しました', error: 'username, password は必須です' },
-      400,
-    )
-  }
-
-  const hash = secretHash(username)
-
-  try {
-    const data = await cognito.send(new InitiateAuthCommand({
-      AuthFlow: 'USER_PASSWORD_AUTH',
-      ClientId: cognitoClientId,
-      AuthParameters: {
-        USERNAME: username,
-        PASSWORD: password,
-        ...(hash ? { SECRET_HASH: hash } : {}),
-      },
-    }))
-    return c.json({ message: 'サインインが成功しました', data: withoutMetadata(data) })
-  } catch (error) {
-    return c.json({ message: 'サインインに失敗しました', error: errorMessage(error) }, 400)
-  }
-})
-
-auth.post('/logout', async (c) => {
-  const token = accessTokenFromHeader(c.req.header('Authorization'))
-  if (!token) {
-    return c.json({ message: 'トークンが提供されていません' }, 401)
-  }
-
-  try {
-    await cognito.send(new GlobalSignOutCommand({ AccessToken: token }))
-    return c.json({ message: 'ログアウトが成功しました' })
-  } catch (error) {
-    return c.json({ message: 'ログアウトに失敗しました', error: errorMessage(error) }, 400)
-  }
-})
-
-auth.post('/change-password', async (c) => {
-  const token = accessTokenFromHeader(c.req.header('Authorization'))
-  if (!token) {
-    return c.json({ message: 'トークンが提供されていません' }, 401)
-  }
-
-  const body = await readBody(c)
-  const previousPassword = body?.previousPassword
-  const proposedPassword = body?.proposedPassword
-
-  if (!isNonEmptyString(previousPassword) || !isNonEmptyString(proposedPassword)) {
-    return c.json(
-      {
-        message: 'パスワード変更に失敗しました',
-        error: 'previousPassword, proposedPassword は必須です',
-      },
-      400,
-    )
-  }
-
-  try {
-    await cognito.send(new ChangePasswordCommand({
-      AccessToken: token,
-      PreviousPassword: previousPassword,
-      ProposedPassword: proposedPassword,
-    }))
-    return c.json({ message: 'パスワード変更が成功しました' })
-  } catch (error) {
-    return c.json({ message: 'パスワード変更に失敗しました', error: errorMessage(error) }, 400)
-  }
-})
-
-auth.get('/protected', verifyToken, (c) => {
-  return c.json({
-    message: '保護されたルートにアクセスできました',
-    user: withoutMetadata(c.get('user')),
+      const sessionId = createSessionId()
+      await sessions.create({
+        sessionIdHash: hashSessionId(sessionId),
+        email,
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        accessTokenExpiresAt: new Date(Date.now() + result.expiresIn * 1000),
+      })
+      writeSessionCookie(c, sessionId)
+      return c.body(null, 204)
+    } catch (error) {
+      if (error instanceof CognitoAuthError) {
+        if (error.code === 'unavailable') {
+          return c.json(AUTH_UNAVAILABLE, 500)
+        }
+        return c.json(AUTH_FAILED, 401)
+      }
+      return c.json(AUTH_UNAVAILABLE, 500)
+    }
   })
-})
+
+  auth.post('/logout', async (c) => {
+    const sid = readSessionCookie(c)
+    clearSessionCookie(c)
+    if (!sid) {
+      return c.body(null, 204)
+    }
+
+    const revoked = await sessions.revokeByHash(hashSessionId(sid))
+    if (revoked?.refreshToken) {
+      try {
+        await cognito.revokeToken(revoked.refreshToken)
+      } catch {
+        // DB 失効は戻さない。トークンはログに出さない。
+      }
+    }
+    return c.body(null, 204)
+  })
+
+  return auth
+}

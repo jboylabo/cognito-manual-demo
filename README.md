@@ -1,13 +1,14 @@
 # cognito-manual-demo
 
-Hono（Node.js）から Amazon Cognito ユーザープールの登録・確認・サインイン・ログアウト・パスワード変更を呼びます。トップページは Hono JSX の操作 UI です。
+Cognito でメール／パスワードを本人確認し、ログイン状態は PostgreSQL のサーバーセッションで持つ学習用アプリです。
 
-参考: [はじめてのCognitoとExpressで実装するユーザー認証](https://zenn.dev/miumi/articles/f9c8923ec4f3ab)
+- Hono + TypeScript
+- Drizzle ORM + PostgreSQL
+- Docker Compose（API + DB）
 
 ## セットアップ
 
-```
-pnpm install
+```bash
 cp .env.example .env
 ```
 
@@ -16,73 +17,60 @@ cp .env.example .env
 - `AWS_REGION`
 - `COGNITO_USER_POOL_ID`
 - `COGNITO_CLIENT_ID`
-- `COGNITO_CLIENT_SECRET`（アプリクライアントにシークレットがある場合のみ）
+- `COGNITO_CLIENT_SECRET`
+- `DATABASE_URL`（ホストから DB に繋ぐとき）
+- `SESSION_ENCRYPTION_KEY`（32 byte の hex 64 桁。例: `openssl rand -hex 32`）
 
-AWS への認証は `aws login` や `~/.aws` のデフォルト認証チェーンを使います。`.env` にアクセスキーは不要です。事前に `aws login` などでサインインしてください。
+アプリクライアントでは `ALLOW_USER_PASSWORD_AUTH` を有効にし、クライアントシークレット付きである必要があります。
 
-アプリクライアントでは `ALLOW_USER_PASSWORD_AUTH` を有効にしてください。
+## Docker で起動
 
+```bash
+docker compose up --build
 ```
+
+http://localhost:3000/login
+
+Compose 内の API は `DATABASE_URL=postgres://cognito:cognito@db:5432/cognito` を使います。起動時に Drizzle マイグレーションが走ります。
+
+## ホストで開発
+
+```bash
+docker compose up -d db
+pnpm install
 pnpm run dev
 ```
 
-http://localhost:3000
+## Drizzle Studio
 
-## UI
+Postgres を起動したうえで:
 
-ブラウザで開くと次の操作ができます。サインイン後のアクセストークンはブラウザの `localStorage` に保存されます。
-
-- Sign Up / Confirm Sign Up
-- Sign In / Sign Out
-- Change Password（サインイン後。現行パスワードと新しいパスワード）
-
-## エンドポイント
-
-ユーザー登録
-
-```
-curl -X POST http://localhost:3000/auth/signup \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user@example.com", "password": "Password1!", "email": "user@example.com"}'
+```bash
+docker compose up -d db
+pnpm db:studio
 ```
 
-メールの確認コードでユーザー確認
+ブラウザで Studio が開きます（通常は http://local.drizzle.studio ）。`.env` の `DATABASE_URL` を使います。
 
-```
-curl -X POST http://localhost:3000/auth/confirm-signup \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user@example.com", "code": "123456"}'
-```
+## テスト
 
-サインイン。レスポンスの `AuthenticationResult.AccessToken` を以降のリクエストに使います。
+Postgres を起動したうえで:
 
-```
-curl -X POST http://localhost:3000/auth/signin \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user@example.com", "password": "Password1!"}'
+```bash
+docker compose up -d db
+pnpm test
 ```
 
-保護ルート
+Cognito は stub します。セッションは実 DB を使います。
 
-```
-curl -X GET http://localhost:3000/auth/protected \
-  -H "Authorization: Bearer <access token>"
-```
+## API
 
-パスワード変更（サインイン後）
+| Method | Path | 説明 |
+|---|---|---|
+| GET | `/login` | ログイン画面（Sign Out あり） |
+| POST | `/auth/login` | `{ email, password }` → 204 + `sid` Cookie |
+| POST | `/auth/logout` | セッション失効 + RefreshToken の RevokeToken |
+| GET | `/me` | 要ログイン。アカウント画面（メール + Sign Out） |
+| GET | `/api/me` | 要ログイン。`{ email }` JSON |
 
-```
-curl -X POST http://localhost:3000/auth/change-password \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <access token>" \
-  -d '{"previousPassword": "Password1!", "proposedPassword": "Password2!"}'
-```
-
-ログアウト
-
-```
-curl -X POST http://localhost:3000/auth/logout \
-  -H "Authorization: Bearer <access token>"
-```
-
-ログアウト後に同じトークンで保護ルートを呼ぶと 401 になります。
+成功時レスポンスにアクセストークン／更新トークンは含まれません。

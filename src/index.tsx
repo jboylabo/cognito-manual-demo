@@ -1,19 +1,32 @@
 import { serve } from '@hono/node-server'
-import { Hono } from 'hono'
-import { Home } from './pages/Home.js'
-import { auth } from './routes/auth.js'
+import { createApp } from './app.js'
+import { createDb } from './db/client.js'
+import { createCognitoAuth } from './lib/cognito.js'
+import { loadEnv } from './lib/env.js'
+import { createSessionStore } from './lib/session-store.js'
+import { migrate } from './migrate.js'
 
-const app = new Hono()
+const env = loadEnv()
+const { db, client } = createDb(env.databaseUrl)
+await migrate(db)
 
-app.get('/', (c) => {
-  return c.html(<Home />)
+const app = createApp({
+  cognito: createCognitoAuth({
+    region: env.awsRegion,
+    clientId: env.cognitoClientId,
+    clientSecret: env.cognitoClientSecret,
+  }),
+  sessions: createSessionStore(db, env.sessionEncryptionKey),
 })
-
-app.route('/auth', auth)
 
 serve({
   fetch: app.fetch,
-  port: 3000
+  port: env.port,
 }, (info) => {
   console.log(`Server is running on http://localhost:${info.port}`)
+})
+
+process.on('SIGINT', async () => {
+  await client.end()
+  process.exit(0)
 })
